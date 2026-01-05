@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: geo_feed_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: feed
+      POSTGRES_USER: feed_user
+      POSTGRES_PASSWORD: feed_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U feed_user -d feed"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: geo_feed_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: geo_feed_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      HTTP_PORT: "8080"
+      POSTGRES_URL: postgres://feed_user:feed_password@postgres:5432/feed?sslmode=disable
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "8080:8080"
+
+volumes:
+  pg_data:
+  redis_data:
