@@ -3,14 +3,13 @@
 -- ============================
 
 CREATE EXTENSION IF NOT EXISTS postgis;
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- ============================
 -- Geo Content table
 -- ============================
 
 CREATE TABLE geo_content (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY,
 
     external_id UUID UNIQUE NOT NULL,
 

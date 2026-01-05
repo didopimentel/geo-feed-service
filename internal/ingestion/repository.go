@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -31,8 +32,10 @@ func (r *Repository) SaveContent(
 	attributes []byte,
 	baseScore float64,
 ) error {
+	id := uuid.NewV7() // Generate UUIDv7 because we are not sure about DB support for V7 generations
 	const query = `
 		INSERT INTO feed_items (
+			id
 			external_id,
 			type,
 			location,
@@ -46,7 +49,8 @@ func (r *Repository) SaveContent(
 			ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography,
 			$5,
 			$6,
-			$7
+			$7,
+			$8
 		)
 		ON CONFLICT (external_id) DO NOTHING
 	`
@@ -57,6 +61,7 @@ func (r *Repository) SaveContent(
 	cmdTag, err := r.pool.Exec(
 		ctx,
 		query,
+		id,
 		externalID,
 		domainType,
 		lng,
