@@ -32,9 +32,9 @@ func (r *Repository) SaveContent(
 	attributes []byte,
 	baseScore float64,
 ) error {
-	id := uuid.NewV7() // Generate UUIDv7 because we are not sure about DB support for V7 generations
+	id, _ := uuid.NewV7() // Generate UUIDv7 because we are not sure about DB support for V7 generations
 	const query = `
-		INSERT INTO feed_items (
+		INSERT INTO geo_content (
 			id
 			external_id,
 			type,
@@ -46,8 +46,8 @@ func (r *Repository) SaveContent(
 		VALUES (
 			$1,
 			$2,
-			ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography,
-			$5,
+			$3,
+			ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography,
 			$6,
 			$7,
 			$8
