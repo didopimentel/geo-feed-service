@@ -2,12 +2,18 @@ package handlers
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"geo-feed-service/internal/entities"
 	"geo-feed-service/internal/feed"
-	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/twpayne/go-geom"
+	"github.com/twpayne/go-geom/encoding/wkb"
 )
 
 type FeedAPIUseCases interface {
@@ -22,48 +28,56 @@ func NewFeedAPI(uc FeedAPIUseCases) *FeedAPI {
 	return &FeedAPI{uc: uc}
 }
 
-type GetFeedRequest struct {
-	// User location
-	Lat float64 `json:"lat"`
-	Lng float64 `json:"lng"`
-
-	// Search radius in meters
-	RadiusMeters int `json:"radius_meters"`
-
-	// Optional content type filters (article, event, alert, etc.)
-	Types []string `json:"types"`
-
-	// Max number of items to return
-	// Defaults to 20, max capped server-side
-	Limit int `json:"limit"`
-
-	// Opaque cursor for pagination
-	Cursor string `json:"cursor"`
+// FeedItemDTO is the API representation of a feed item.
+type FeedItemDTO struct {
+	ID          string          `json:"id"`
+	Type        string          `json:"type"`
+	Lat         float64         `json:"lat"`
+	Lng         float64         `json:"lng"`
+	PublishedAt time.Time       `json:"published_at"`
+	Attributes  json.RawMessage `json:"attributes"`
+	Score       float64         `json:"score"`
 }
 type GetFeedResponse struct {
-	Items      []entities.FeedItem `json:"items"`
-	NextCursor string              `json:"next_cursor"`
+	Items      []FeedItemDTO `json:"items"`
+	NextCursor string        `json:"next_cursor"`
 }
 
 func (api *FeedAPI) GetFeed(writer http.ResponseWriter, req *http.Request) {
 	slog.Info("feed query started")
-	var request GetFeedRequest
 
-	body, err := io.ReadAll(req.Body)
+	q := req.URL.Query()
+
+	lat, err := strconv.ParseFloat(q.Get("lat"), 64)
 	if err != nil {
-		slog.Error("Failed to read request body", "error", err)
-		writer.WriteHeader(http.StatusInternalServerError)
+		http.Error(writer, "invalid lat", http.StatusBadRequest)
 		return
 	}
 
-	err = json.Unmarshal(body, &request)
+	lng, err := strconv.ParseFloat(q.Get("lng"), 64)
 	if err != nil {
-		slog.Error("Failed to unmarshal request body", "error", err)
-		http.Error(writer, err.Error(), http.StatusBadRequest)
+		http.Error(writer, "invalid lng", http.StatusBadRequest)
 		return
 	}
 
-	input, err := toGetFeedInput(request)
+	radius, err := strconv.Atoi(q.Get("radius_meters"))
+	if err != nil || radius <= 0 {
+		http.Error(writer, "invalid radius_meters", http.StatusBadRequest)
+		return
+	}
+
+	limit := 20
+	if q.Get("limit") != "" {
+		if l, err := strconv.Atoi(q.Get("limit")); err == nil && l > 0 {
+			limit = l
+		}
+	}
+
+	types := q["types"] // supports ?types=article&types=event
+
+	cursorStr := q.Get("cursor")
+
+	input, err := toGetFeedInput(lat, lng, radius, types, limit, cursorStr)
 	if err != nil {
 		slog.Error("Invalid feed query", "error", err)
 		http.Error(writer, err.Error(), http.StatusBadRequest)
@@ -77,17 +91,12 @@ func (api *FeedAPI) GetFeed(writer http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	var nextCursor string
-	if feedData.NextCursor != nil {
-		nextCursor, err = entities.EncodeCursor(feedData.NextCursor)
-		if err != nil {
-			slog.Error("Failed to encode next cursor", "error", err)
-			writer.WriteHeader(http.StatusInternalServerError)
-			return
-		}
+	response, err := toGetFeedResponse(feedData)
+	if err != nil {
+		slog.Error("Failed to convert feed data to response", "error", err)
+		writer.WriteHeader(http.StatusInternalServerError)
+		return
 	}
-
-	response := toGetFeedResponse(feedData, nextCursor)
 
 	respBytes, err := json.Marshal(response)
 	if err != nil {
@@ -100,35 +109,82 @@ func (api *FeedAPI) GetFeed(writer http.ResponseWriter, req *http.Request) {
 	writer.Write(respBytes)
 }
 
-func toGetFeedResponse(feedData *entities.Feed, nextCursor string) GetFeedResponse {
-	return GetFeedResponse{
-		Items:      feedData.Items,
-		NextCursor: nextCursor,
+// decodePointWKB decodes a POINT geography WKB into lat/lng.
+func decodePointWKB(wkbBytes []byte) (lat float64, lng float64, err error) {
+	g, err := wkb.Unmarshal(wkbBytes)
+	if err != nil {
+		return 0, 0, err
 	}
+
+	point, ok := g.(*geom.Point)
+	if !ok {
+		return 0, 0, errors.New("geometry is not a point")
+	}
+
+	coords := point.Coords()
+	return coords[1], coords[0], nil // lat, lng
 }
 
-func toGetFeedInput(req GetFeedRequest) (feed.GetFeedInput, error) {
+func toGetFeedResponse(feedData *entities.Feed) (GetFeedResponse, error) {
+	items := make([]FeedItemDTO, 0, len(feedData.Items))
+
+	for _, it := range feedData.Items {
+		lat, lng, err := decodePointWKB(it.LocationWKB)
+		if err != nil {
+			return GetFeedResponse{}, err
+		}
+
+		items = append(items, FeedItemDTO{
+			ID:          hex.EncodeToString(it.ID), // UUID v7 → hex string
+			Type:        string(it.Type),
+			Lat:         lat,
+			Lng:         lng,
+			PublishedAt: it.PublishedAt,
+			Attributes:  it.Attributes,
+			Score:       it.Score,
+		})
+	}
+
+	var nextEncodedCursor string
+	var err error
+	if feedData.NextCursor != nil {
+		nextEncodedCursor, err = entities.EncodeCursor(feedData.NextCursor)
+		if err != nil {
+			slog.Error("Failed to encode next cursor", "error", err)
+			return GetFeedResponse{}, err
+		}
+	}
+
+	return GetFeedResponse{
+		Items:      items,
+		NextCursor: nextEncodedCursor,
+	}, nil
+}
+
+func toGetFeedInput(lat float64, lng float64, radiusMeters int, types []string, limit int, cursorStr string) (feed.GetFeedInput, error) {
 	var cursor *entities.Cursor
-	if req.Cursor != "" {
-		c, err := entities.DecodeCursor(req.Cursor)
+	if cursorStr != "" {
+		c, err := entities.DecodeCursor(cursorStr)
 		if err != nil {
 			return feed.GetFeedInput{}, err
 		}
 		cursor = c
 	}
-	types := make([][]byte, 0, len(req.Types))
-	for _, t := range req.Types {
-		types = append(types, []byte(t))
+
+	inputTypes := make([][]byte, 0, len(types))
+
+	for _, t := range types {
+		inputTypes = append(inputTypes, []byte(t))
 	}
-	limit := req.Limit
+
 	if limit <= 0 || limit > 50 {
 		limit = 20
 	}
 	return feed.GetFeedInput{
-		Lat:          req.Lat,
-		Lng:          req.Lng,
-		RadiusMeters: req.RadiusMeters,
-		Types:        types,
+		Lat:          lat,
+		Lng:          lng,
+		RadiusMeters: radiusMeters,
+		Types:        inputTypes,
 		Limit:        limit,
 		Cursor:       cursor,
 	}, nil

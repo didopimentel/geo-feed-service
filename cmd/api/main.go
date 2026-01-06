@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"geo-feed-service/internal/feed"
 	"geo-feed-service/internal/http/handlers"
 	"geo-feed-service/internal/ingestion"
 	"log/slog"
@@ -90,17 +91,18 @@ func main() {
 	// ============================
 
 	ingestionRepository := ingestion.NewRepository(pgPool)
+	feedRepository := feed.NewRepository(pgPool)
 
 	// ============================
 	// UseCases and Handlers
 	// ============================
 
-	var feedUseCases handlers.FeedAPIUseCases
 	var healthUseCases handlers.HealthAPIUseCases
 	ingestionService := ingestion.NewService(ingestionRepository)
+	feedService := feed.NewService(feedRepository)
 
 	ucs := handlers.UseCases{
-		FeedAPIUseCases:      feedUseCases,
+		FeedAPIUseCases:      feedService,
 		HealthAPIUseCases:    healthUseCases,
 		IngestionAPIUseCases: ingestionService,
 	}
