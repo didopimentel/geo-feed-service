@@ -9,6 +9,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+type IRepository interface {
+	SaveContent(externalID []byte, domainType []byte, lat float64, lng float64, publishedAt time.Time, attributes []byte, baseScore float64) error
+}
+
 type Repository struct {
 	pool *pgxpool.Pool
 }
@@ -35,7 +39,7 @@ func (r *Repository) SaveContent(
 	id, _ := uuid.NewV7() // Generate UUIDv7 because we are not sure about DB support for V7 generations
 	const query = `
 		INSERT INTO geo_content (
-			id
+			id,
 			external_id,
 			type,
 			location,

@@ -3,7 +3,8 @@ package main
 import (
 	"context"
 	"errors"
-	"geo-feed-service/app/api/handlers"
+	"geo-feed-service/internal/http/handlers"
+	"geo-feed-service/internal/ingestion"
 	"log/slog"
 	"net/http"
 	"os"
@@ -85,17 +86,23 @@ func main() {
 	logger.Info("connected to redis")
 
 	// ============================
-	// Router
+	// Repositories
+	// ============================
+
+	ingestionRepository := ingestion.NewRepository(pgPool)
+
+	// ============================
+	// UseCases and Handlers
 	// ============================
 
 	var feedUseCases handlers.FeedAPIUseCases
 	var healthUseCases handlers.HealthAPIUseCases
-	var ingestionUseCases handlers.IngestionAPIUseCases
+	ingestionService := ingestion.NewService(ingestionRepository)
 
 	ucs := handlers.UseCases{
 		FeedAPIUseCases:      feedUseCases,
 		HealthAPIUseCases:    healthUseCases,
-		IngestionAPIUseCases: ingestionUseCases,
+		IngestionAPIUseCases: ingestionService,
 	}
 
 	r := handlers.NewServer(ucs)

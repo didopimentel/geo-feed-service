@@ -2,15 +2,11 @@ package ingestion
 
 import "time"
 
-type IRepository interface {
-	SaveContent(externalID []byte, domainType []byte, lat float64, lng float64, publishedAt time.Time, attributes []byte, baseScore float64) error
-}
-
 type Service struct {
-	repository Repository
+	repository IRepository
 }
 
-func NewService(repo Repository) *Service {
+func NewService(repo IRepository) *Service {
 	return &Service{repository: repo}
 }
 
